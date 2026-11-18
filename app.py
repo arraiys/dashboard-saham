@@ -98,39 +98,90 @@ with st.sidebar:
     else:
         kode_list = SYARIAH
     hanya_beli = st.checkbox("Tampilkan hanya sinyal BELI", value=False)
-    periode = st.selectbox("Periode data", ["6mo", "1y", "2y"], index=1)
-    atr_sl = st.slider("Jarak Stop Loss (x ATR)", 1.0, 3.0, 1.5, 0.1)
-    rr1 = st.slider("Take Profit 1 (x risiko)", 1.0, 3.0, 1.5, 0.5)
-    rr2 = st.slider("Take Profit 2 (x risiko)", 2.0, 5.0, 3.0, 0.5)
-    pakai_ai = st.checkbox("Gabung model AI (SahamAI)", value=False)
+    mode_analisa = st.radio("Mode analisa",
+                            ["Harian (swing)", "Intraday 15m (SahamAI)"])
+    if mode_analisa.startswith("Harian"):
+        periode = st.selectbox("Periode data", ["6mo", "1y", "2y"], index=1)
+        atr_sl = st.slider("Jarak Stop Loss (x ATR)", 1.0, 3.0, 1.5, 0.1)
+        rr1 = st.slider("Take Profit 1 (x risiko)", 1.0, 3.0, 1.5, 0.5)
+        rr2 = st.slider("Take Profit 2 (x risiko)", 2.0, 5.0, 3.0, 0.5)
+    else:
+        modal = st.number_input("Modal trading (Rp)", 1_000_000, 10_000_000_000,
+                                10_000_000, 1_000_000, format="%d")
+        risiko_pct = st.slider("Maks rugi per transaksi (% modal)", 0.5, 3.0, 1.0, 0.5)
     st.caption("Bukan ajakan jual/beli. Selalu cek ulang sebelum transaksi.")
 
+if not kode_list:
+    st.info("Belum ada saham syariah untuk ditampilkan.")
+    st.stop()
+
+# ================= MODE INTRADAY (SahamAI) =================
+if mode_analisa.startswith("Intraday"):
+    from intraday import ambil, analisis, kondisi_ihsg
+
+    @st.cache_data(ttl=300)          # intraday: perbarui tiap 5 menit
+    def muat_intraday(kode):
+        return ambil(kode)
+
+    @st.cache_data(ttl=300)
+    def muat_ihsg():
+        return kondisi_ihsg()
+
+    try:
+        teks, bahaya = muat_ihsg()
+        (st.error if bahaya else st.info)(
+            teks + (" — IHSG turun >1%, kurangi ukuran posisi." if bahaya else ""))
+    except Exception as e:
+        st.warning(f"IHSG gagal diambil: {e}")
+
+    hasil_i = []
+    bar = st.progress(0.0, text="Mengambil data intraday...")
+    for n, kode in enumerate(kode_list, 1):
+        try:
+            d, i = muat_intraday(kode)
+            hasil_i.append(analisis(kode, d, i, modal, risiko_pct))
+        except Exception as e:
+            hasil_i.append({"Kode": kode, "Status": f"ERROR: {e}"})
+        bar.progress(n / len(kode_list), text=f"{kode} ({n}/{len(kode_list)})")
+    bar.empty()
+
+    tb = pd.DataFrame(hasil_i)
+    urut = {"BELI": 0, "PANTAU": 1, "HINDARI": 2}
+    tb["_u"] = tb["Status"].map(urut).fillna(3)
+    tb = tb.sort_values(["_u", "Skor"], ascending=[True, False]).drop(columns="_u")
+    if hanya_beli:
+        tb = tb[tb["Status"] == "BELI"]
+
+    st.subheader("Screener Intraday 15 menit — kondisi BELUM PUNYA")
+    st.caption("Data dari Yahoo Finance (tertunda ±15 menit) • tanda BASI = data "
+               "lebih dari 30 menit • diperbarui tiap 5 menit")
+    if tb.empty:
+        st.info("Tidak ada sinyal BELI saat ini.")
+        st.stop()
+    warna_i = {"BELI": "background-color:#1b5e20;color:white",
+               "PANTAU": "background-color:#f9a825;color:black",
+               "HINDARI": "background-color:#b71c1c;color:white"}
+    kolom = [c for c in tb.columns if c != "Alasan"]
+    st.dataframe(tb[kolom].style.map(lambda v: warna_i.get(v, ""), subset=["Status"])
+                 .format({"Chg%": "{:+.2f}%", "RSI_i": "{:.1f}", "RSI_d": "{:.1f}",
+                          "RVOL": "{:.2f}x"}, na_rep="-"),
+                 hide_index=True, use_container_width=True)
+    st.caption("BELI = skor ≥5 • PANTAU = 3–4 • Entry = rentang antri beli • "
+               "Lot = jumlah lot sesuai modal & batas rugi")
+    with st.expander("Alasan tiap saham"):
+        for _, x in tb.iterrows():
+            st.markdown(f"- **{x['Kode']}** [{x['Status']}]: {x.get('Alasan', '') or '-'}")
+    st.stop()
+
+# ================= MODE HARIAN =================
 @st.cache_data(ttl=600)          # data disimpan 10 menit agar cepat
 def muat_semua(kode_tuple, periode):
     return ambil_banyak(list(kode_tuple), periode)
 
 
-def skor_model_ai(df):
-    """
-    >>> TEMPAT MENEMPEL MODEL DARI SahamAI.ipynb <<<
-    Kembalikan angka -1 (sangat bearish) .. +1 (sangat bullish), atau None.
-    Contoh jika di notebook Anda menyimpan model dengan joblib:
-        import joblib
-        model = joblib.load("model_saham.pkl")
-        fitur = df[["EMA9", "EMA21", "RSI", "VolRasio"]].tail(1)
-        peluang_naik = model.predict_proba(fitur)[0][1]
-        return (peluang_naik - 0.5) * 2
-    """
-    return None
-
-
 # ---------- Tabel ringkasan ----------
 hasil = {}
 baris = []
-if not kode_list:
-    st.info("Belum ada saham syariah untuk ditampilkan.")
-    st.stop()
-
 with st.spinner(f"Mengambil data {len(kode_list)} saham..."):
     semua = muat_semua(tuple(kode_list), periode)
     for kode in kode_list:
@@ -139,11 +190,7 @@ with st.spinner(f"Mengambil data {len(kode_list)} saham..."):
                 st.warning(f"{kode}: data tidak tersedia")
                 continue
             df = semua[kode]
-            ai = None
-            if pakai_ai:
-                from sinyal import hitung_indikator
-                ai = skor_model_ai(hitung_indikator(df))
-            r = analisa(df, atr_sl, rr1, rr2, skor_ai=ai)
+            r = analisa(df, atr_sl, rr1, rr2)
             if r["sinyal"] == "DATA KURANG":
                 continue
             hasil[kode] = r
