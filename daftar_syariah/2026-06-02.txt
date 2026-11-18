@@ -1,0 +1,34 @@
+# Daftar saham syariah yang dipakai dashboard (satu kode per baris)
+# Isi awal: konstituen JII periode 2 Juni - 30 November 2026
+# Perbarui tiap 6 bulan (Desember & Juni) dari idx.co.id atau ojk.go.id,
+# atau unggah file Excel daftar ISSI/DES langsung di dashboard.
+AADI
+ADMR
+ADRO
+ANTM
+ARCI
+BKSL
+BRIS
+BRMS
+BUMI
+CPIN
+DEWA
+ENRG
+EXCL
+ICBP
+INDF
+INKP
+JPFA
+KLBF
+MBMA
+MDKA
+MEDC
+PGAS
+PTBA
+RAJA
+RATU
+TLKM
+TPIA
+UNTR
+UNVR
+WIFI
